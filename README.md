@@ -35,7 +35,7 @@ A sample implementation of the `RequestAuthorizationView` is the following:
 import SwiftUI
 import IdentityDocumentServices
 import IdentityDocumentServicesUI
-import WalletDcApi
+import DcApi18013AnnexC
 import MdocDataModel18013
 import WalletStorage
 
