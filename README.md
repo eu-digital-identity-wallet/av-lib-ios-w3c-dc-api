@@ -19,7 +19,6 @@ This library enables iOS applications to participate in online mobile document (
 ```swift
 @main
 struct ProviderExtension: IdentityDocumentProvider {
-	// com.scytales.wallet.WalletDcApiExtension
 	let dcApiHandler = DcApiHandler(serviceName: "myService", accessGroup: "AppStoreTeamID.groupName")
 	
 	var body: some IdentityDocumentRequestScene {
