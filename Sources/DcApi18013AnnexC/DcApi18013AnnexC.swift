@@ -106,17 +106,19 @@ public actor DcApiHandler {
 		let selectedItems = Dictionary(uniqueKeysWithValues: selectedItems1.compactMap { (key: String, value: [NameSpace : [RequestItem]]) -> (String, [NameSpace : [RequestItem]])? in	if let id = docTypeToIds[key] { (id, value) } else { nil }	})
 		let resp = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: selectedItems, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
 		guard let resp else { throw MdocHelpers.makeError(code: .noDocumentToReturn) }
-        let plainText = resp.deviceResponse.encode(options: CBOROptions())
         let sessionTranscriptEncoded = sessionTranscript.encode(options: CBOROptions())
-		let docs = resp.deviceResponse.documents
-        if let first = idsToDocData.first {
-            let docMetadataFirst = DocMetadata(from: first.metadata.1)
-            try await transactionLogger?.log(transaction: TransactionLog(timestamp: Int64(Date.now.timeIntervalSince1970.rounded()), status: .completed, errorMessage: nil, rawRequest: deviceRequestData, rawResponse: Data(plainText), relyingParty: TransactionLog.RelyingParty(name: originUrl, isVerified: false, certificateChain: [], readerAuth: nil), issuingParty: TransactionLog.IssuingParty(name: docMetadataFirst?.getIssuerDisplayName(nil) ?? "", identifier: ""), type: .presentation, dataFormat: .cbor, sessionTranscript: Data(sessionTranscriptEncoded), docMetadata: [first.metadata.1], documentId: first.doc.0, docType: docs?.first?.docType ?? resp.deviceResponse.zkDocuments?.first?.documentData.docType, displayName: docMetadataFirst?.getDisplayName(nil)))
+        for (i, doc) in (resp.deviceResponse.documents ?? []).enumerated() {
+			var docDeviceResponse = resp.deviceResponse
+			docDeviceResponse = DeviceResponse(version: docDeviceResponse.version, documents: [doc], zkDocuments: nil, documentErrors: docDeviceResponse.documentErrors, status: docDeviceResponse.status)
+			let plainText = docDeviceResponse.encode(options: CBOROptions())
+			guard let index = idsToMetadata.firstIndex(where: { $0.0 == resp.documentIds[i] }) else { continue }
+            let docMetadata = DocMetadata(from: idsToMetadata[index].1)
+            try await transactionLogger?.log(transaction: TransactionLog(timestamp: Int64(Date.now.timeIntervalSince1970.rounded()), status: .completed, errorMessage: nil, rawRequest: deviceRequestData, rawResponse: Data(plainText), relyingParty: TransactionLog.RelyingParty(name: originUrl, isVerified: false, certificateChain: [], readerAuth: nil), issuingParty: TransactionLog.IssuingParty(name: docMetadata?.getIssuerDisplayName(nil) ?? "", identifier: ""), type: .presentation, dataFormat: .cbor, sessionTranscript: Data(sessionTranscriptEncoded), docMetadata: [idsToMetadata[index].1], documentId: idsToMetadata[index].0, docType: doc.docType, displayName: docMetadata?.getDisplayName(nil)))
         }
 		// Update key batch info for presented documents to decrement one-time-use count
 		try await updateKeyBatchInfoForPresentedDocuments(presentedIds: Array(selectedItems.keys), docKeyInfos: docKeyInfos, documentKeyIndexes: documentKeyIndexes, deviceResponse: resp.deviceResponse)
 		// Create the Sender instance and encrypt
-		let res = Self.hpkeEncrypt(receiverPublicKeyRepresentation: Data(bx + by), plainText: Data(plainText), info: Data(sessionTranscriptEncoded))
+		let res = Self.hpkeEncrypt(receiverPublicKeyRepresentation: Data(bx + by), plainText: Data(resp.deviceResponse.encode(options: CBOROptions())), info: Data(sessionTranscriptEncoded))
 		let encryptedResponseData = CBOR.map([.utf8String("enc"): .byteString(res[0].bytes), .utf8String("cipherText"): .byteString(res[1].bytes)])
 		let encryptedResponse = CBOR.array([.utf8String("dcapi"), encryptedResponseData])
 		return Data(encryptedResponse.encode())
