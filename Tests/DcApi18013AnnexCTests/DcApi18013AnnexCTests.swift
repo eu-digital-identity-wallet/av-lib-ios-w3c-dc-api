@@ -36,3 +36,22 @@ import MdocDataModel18013
 	#expect(filteredClaims.count == 2)
 	#expect(filteredClaims.map(\.name).sorted() == ["family_name", "organ_donor"])
 }
+
+@Test func expandsSelectionsToAllDocumentIdsForADocType() {
+	let selectionsByDocType = [
+		"org.iso.18013.5.1.mDL": [
+			"org.iso.18013.5.1": ["family_name", "given_name"]
+		]
+	]
+	let documentIdsByDocType = [
+		"org.iso.18013.5.1.mDL": ["doc-1", "doc-2"],
+		"org.iso.18013.5.1.mVR": ["doc-3"]
+	]
+
+	let expandedSelections = DcApiHandler.expandSelections(for: selectionsByDocType, documentIdsByDocType: documentIdsByDocType)
+
+	#expect(expandedSelections.count == 2)
+	#expect(expandedSelections["doc-1"] == selectionsByDocType["org.iso.18013.5.1.mDL"])
+	#expect(expandedSelections["doc-2"] == selectionsByDocType["org.iso.18013.5.1.mDL"])
+	#expect(expandedSelections["doc-3"] == nil)
+}
