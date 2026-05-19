@@ -80,7 +80,7 @@ public actor DcApiHandler {
 		// create input structures
         if documents.count == 0 { try await loadIssuedCborDocuments() }
 		let idsToDocData = documents.compactMap { $0.getDataForTransfer() }
-        let docTypeToIds = Dictionary(grouping: documents, by: { d in d.docType}).mapValues { $0.first!.id }
+        let docTypeToIds = Dictionary(grouping: documents, by: { d in d.docType}).mapValues { docs in docs.map(\.id) }
 		var docKeyInfos = Dictionary(uniqueKeysWithValues: idsToDocData.map(\.docKeyInfo))
 		var docData = Dictionary(uniqueKeysWithValues: idsToDocData.map(\.doc))
 		var documentKeyIndexes = docData.mapValues { _ in 0 }
@@ -103,7 +103,7 @@ public actor DcApiHandler {
 		let sessionTranscript = SessionTranscript(handOver: dcApiHandoverCbor)
         let resp1 = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: nil, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
 		let selectedItems1 = resp1?.validRequestItems ?? [:]
-		let selectedItems = Dictionary(uniqueKeysWithValues: selectedItems1.compactMap { (key: String, value: [NameSpace : [RequestItem]]) -> (String, [NameSpace : [RequestItem]])? in	if let id = docTypeToIds[key] { (id, value) } else { nil }	})
+		let selectedItems = Self.expandSelections(for: selectedItems1, documentIdsByDocType: docTypeToIds)
 		let resp = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: selectedItems, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
 		guard let resp else { throw MdocHelpers.makeError(code: .noDocumentToReturn) }
         let sessionTranscriptEncoded = sessionTranscript.encode(options: CBOROptions())
@@ -164,6 +164,16 @@ public actor DcApiHandler {
 	public static func sha256(data: Data) -> Data {
 			let hashed = SHA256.hash(data: data)
 			return Data(hashed)
+	}
+
+	static func expandSelections<Value>(for selectionsByDocType: [DocType: Value], documentIdsByDocType: [DocType: [String]]) -> [String: Value] {
+		var selectionsByDocumentId: [String: Value] = [:]
+		for (docType, selection) in selectionsByDocType {
+			for documentId in documentIdsByDocType[docType] ?? [] {
+				selectionsByDocumentId[documentId] = selection
+			}
+		}
+		return selectionsByDocumentId
 	}
 
 	static func requestedElementsByDocType(documentRequestSet: ISO18013MobileDocumentRequest.DocumentRequestSet) throws -> [DocType: [NameSpace: Set<DataElementIdentifier>]] {
