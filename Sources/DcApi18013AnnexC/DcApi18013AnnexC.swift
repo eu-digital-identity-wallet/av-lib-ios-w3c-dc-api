@@ -107,14 +107,10 @@ public actor DcApiHandler {
 		let resp = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: selectedItems, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
 		guard let resp else { throw MdocHelpers.makeError(code: .noDocumentToReturn) }
         let sessionTranscriptEncoded = sessionTranscript.encode(options: CBOROptions())
-        for (i, doc) in (resp.deviceResponse.documents ?? []).enumerated() {
-			var docDeviceResponse = resp.deviceResponse
-			docDeviceResponse = DeviceResponse(version: docDeviceResponse.version, documents: [doc], zkDocuments: nil, documentErrors: docDeviceResponse.documentErrors, status: docDeviceResponse.status)
-			let plainText = docDeviceResponse.encode(options: CBOROptions())
-			guard let index = idsToMetadata.firstIndex(where: { $0.0 == resp.documentIds[i] }) else { continue }
-            let docMetadata = DocMetadata(from: idsToMetadata[index].1)
-            try await transactionLogger?.log(transaction: TransactionLog(timestamp: Int64(Date.now.timeIntervalSince1970.rounded()), status: .completed, errorMessage: nil, rawRequest: deviceRequestData, rawResponse: Data(plainText), relyingParty: TransactionLog.RelyingParty(name: originUrl, isVerified: false, certificateChain: [], readerAuth: nil), issuingParty: TransactionLog.IssuingParty(name: docMetadata?.getIssuerDisplayName(nil) ?? "", identifier: ""), type: .presentation, dataFormat: .cbor, sessionTranscript: Data(sessionTranscriptEncoded), docMetadata: [idsToMetadata[index].1], documentId: idsToMetadata[index].0, docType: doc.docType, displayName: docMetadata?.getDisplayName(nil)))
-        }
+		let docDeviceResponse = resp.deviceResponse
+		let plainText = docDeviceResponse.encode(options: CBOROptions())
+		let docMetadataValues = resp.documentIds.map { id in docMetadata[id] }
+		try await transactionLogger?.log(transaction: TransactionLog(timestamp: Int64(Date.now.timeIntervalSince1970.rounded()), status: .completed, errorMessage: nil, rawRequest: deviceRequestData, rawResponse: Data(plainText), relyingParty: TransactionLog.RelyingParty(name: originUrl, isVerified: false, certificateChain: [], readerAuth: nil), type: .presentation, dataFormat: .cbor, sessionTranscript: Data(sessionTranscriptEncoded), docMetadata: docMetadataValues))
 		// Update key batch info for presented documents to decrement one-time-use count
 		try await updateKeyBatchInfoForPresentedDocuments(presentedIds: Array(selectedItems.keys), docKeyInfos: docKeyInfos, documentKeyIndexes: documentKeyIndexes, deviceResponse: resp.deviceResponse)
 		// Create the Sender instance and encrypt
