@@ -66,13 +66,14 @@ public actor DcApiHandler {
 	public func validateConsistency(request: ISO18013MobileDocumentRequest, rawRequest: IdentityDocumentWebPresentmentRawRequest) async throws {
 	}
 
-	public func buildAndEncryptResponse(remoteRawRequest: DcApiExtensionRequest, zkSystemRepository: ZkSystemRepository?) async throws -> Data {
+	public func buildAndEncryptResponse(remoteRawRequest: DcApiExtensionRequest, selectedDocumentIds: Set<String>? = nil, selectedClaimsByDocumentId: [String: [String: [String]]]? = nil, zkSystemRepository: ZkSystemRepository?) async throws -> Data {
 		let rawRequest = IdentityDocumentWebPresentmentRawRequest(requestType: .iso18013MobileDocument, requestData: remoteRawRequest.rawRequestData)
 		let originUrl = remoteRawRequest.originUrl
-		return try await buildAndEncryptResponse(rawRequest: rawRequest, originUrl: originUrl, zkSystemRepository: zkSystemRepository)
+		return try await buildAndEncryptResponse(rawRequest: rawRequest, originUrl: originUrl, selectedDocumentIds: selectedDocumentIds, selectedClaimsByDocumentId: selectedClaimsByDocumentId, zkSystemRepository: zkSystemRepository)
 	}
 
-	public func buildAndEncryptResponse(rawRequest: IdentityDocumentWebPresentmentRawRequest, originUrl: String?, selectedDocumentIds: Set<String>? = nil, zkSystemRepository: ZkSystemRepository? = nil) async throws -> Data {
+	// selectedDocumentIds: if set, include only these documents. selectedClaimsByDocumentId: if set, disclose only these elements per document (docId -> namespace -> [elementId]). Both nil = original behaviour.
+	public func buildAndEncryptResponse(rawRequest: IdentityDocumentWebPresentmentRawRequest, originUrl: String?, selectedDocumentIds: Set<String>? = nil, selectedClaimsByDocumentId: [String: [String: [String]]]? = nil, zkSystemRepository: ZkSystemRepository? = nil) async throws -> Data {
 		guard let originUrl, let jsonRequest = try? JSONSerialization.jsonObject(with: rawRequest.requestData) as? [String: String], let dReqBase64Url = jsonRequest["deviceRequest"], let deviceRequestData = Data(base64urlEncoded: dReqBase64Url),
 			let eiBase64Url = jsonRequest["encryptionInfo"], let eiData = Data(base64urlEncoded: eiBase64Url), let eiCbor = try? CBOR.decode([UInt8](eiData)) else { throw MdocHelpers.makeError(code: .requestDecodeError) }
 		let deviceReq = try DeviceRequest(data: [UInt8](deviceRequestData))
@@ -103,7 +104,10 @@ public actor DcApiHandler {
 		let sessionTranscript = SessionTranscript(handOver: dcApiHandoverCbor)
 		let resp1 = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: nil, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
 		let selectedItems1 = resp1?.validRequestItems ?? [:]
-		let selectedItems = Self.expandSelections(for: selectedItems1, documentIdsByDocType: docTypeToIds, selectedDocumentIds: selectedDocumentIds)
+		var selectedItems = Self.expandSelections(for: selectedItems1, documentIdsByDocType: docTypeToIds, selectedDocumentIds: selectedDocumentIds)
+		if let selectedClaimsByDocumentId {
+			selectedItems = Self.narrowSelectedItems(selectedItems, to: selectedClaimsByDocumentId)
+		}
 		let resp = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: selectedItems, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
 		guard let resp else { throw MdocHelpers.makeError(code: .noDocumentToReturn) }
 		let sessionTranscriptEncoded = sessionTranscript.encode(options: CBOROptions())
@@ -160,6 +164,22 @@ public actor DcApiHandler {
 	public static func sha256(data: Data) -> Data {
 			let hashed = SHA256.hash(data: data)
 			return Data(hashed)
+	}
+
+	// Keeps only the chosen elements per document. selectedItems maps docId -> namespace -> [RequestItem]; chosen maps docId -> namespace -> [elementId]. Documents absent from chosen are left unchanged.
+	static func narrowSelectedItems(_ selectedItems: [String: [NameSpace: [RequestItem]]], to chosen: [String: [String: [String]]]) -> [String: [NameSpace: [RequestItem]]] {
+		var result = selectedItems
+		for (docId, namespaces) in selectedItems {
+			guard let keptByNamespace = chosen[docId] else { continue }
+			var narrowed: [NameSpace: [RequestItem]] = [:]
+			for (namespace, items) in namespaces {
+				let kept = Set(keptByNamespace[namespace] ?? [])
+				let filtered = items.filter { kept.contains($0.elementIdentifier) }
+				if !filtered.isEmpty { narrowed[namespace] = filtered }
+			}
+			result[docId] = narrowed
+		}
+		return result
 	}
 
 	static func expandSelections<Value>(for selectionsByDocType: [DocType: Value], documentIdsByDocType: [DocType: [String]], selectedDocumentIds: Set<String>? = nil) -> [String: Value] {
