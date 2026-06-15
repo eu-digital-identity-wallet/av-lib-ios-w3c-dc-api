@@ -28,7 +28,7 @@ import SwiftHPKE
 public actor DcApiHandler {
 	let storage: KeyChainStorageService
 	var documents: [WalletStorage.Document] = []
-    var transactionLogger: (any TransactionLogger)?
+	var transactionLogger: (any TransactionLogger)?
 
 	public init(serviceName: String, accessGroup: String, transactionLogger: (any TransactionLogger)? = nil) {
 		storage = KeyChainStorageService(serviceName: serviceName, accessGroup: accessGroup)
@@ -36,7 +36,7 @@ public actor DcApiHandler {
 		let kcSks = KeyChainSecureKeyStorage(serviceName: serviceName, accessGroup: accessGroup)
 		if SecureEnclave.isAvailable { SecureAreaRegistry.shared.register(secureArea: SecureEnclaveSecureArea.create(storage: kcSks)) }
 		SecureAreaRegistry.shared.register(secureArea: SoftwareSecureArea.create(storage: kcSks))
-        self.transactionLogger = transactionLogger
+		self.transactionLogger = transactionLogger
 	}
 
 	public func validateRequest(_ request: ISO18013MobileDocumentRequest) async throws -> ([DocClaimsModel], ISO18013MobileDocumentRequest.DocumentRequestSet, [UInt8], String?) {
@@ -72,15 +72,15 @@ public actor DcApiHandler {
 		return try await buildAndEncryptResponse(rawRequest: rawRequest, originUrl: originUrl, zkSystemRepository: zkSystemRepository)
 	}
 
-    public func buildAndEncryptResponse(rawRequest: IdentityDocumentWebPresentmentRawRequest, originUrl: String?, zkSystemRepository: ZkSystemRepository? = nil) async throws -> Data {
+	public func buildAndEncryptResponse(rawRequest: IdentityDocumentWebPresentmentRawRequest, originUrl: String?, selectedDocumentIds: Set<String>? = nil, zkSystemRepository: ZkSystemRepository? = nil) async throws -> Data {
 		guard let originUrl, let jsonRequest = try? JSONSerialization.jsonObject(with: rawRequest.requestData) as? [String: String], let dReqBase64Url = jsonRequest["deviceRequest"], let deviceRequestData = Data(base64urlEncoded: dReqBase64Url),
 			let eiBase64Url = jsonRequest["encryptionInfo"], let eiData = Data(base64urlEncoded: eiBase64Url), let eiCbor = try? CBOR.decode([UInt8](eiData)) else { throw MdocHelpers.makeError(code: .requestDecodeError) }
 		let deviceReq = try DeviceRequest(data: [UInt8](deviceRequestData))
 		guard case let .array(eiArr) = eiCbor, eiArr.count == 2, case let .map(eiMap) = eiArr[1], case let .map(recPK) = eiMap["recipientPublicKey"], case let .unsignedInt(crv) = recPK[-1], crv == 1, case .unsignedInt(_) = recPK[1], case let .byteString(bx) = recPK[-2], case let .byteString(by) = recPK[-3] else { throw MdocHelpers.makeError(code: .sessionEncryptionNotInitialized) }
 		// create input structures
-        if documents.count == 0 { try await loadIssuedCborDocuments() }
+		if documents.count == 0 { try await loadIssuedCborDocuments() }
 		let idsToDocData = documents.compactMap { $0.getDataForTransfer() }
-        let docTypeToIds = Dictionary(grouping: documents, by: { d in d.docType}).mapValues { docs in docs.map(\.id) }
+		let docTypeToIds = Dictionary(grouping: documents, by: { d in d.docType}).mapValues { docs in docs.map(\.id) }
 		var docKeyInfos = Dictionary(uniqueKeysWithValues: idsToDocData.map(\.docKeyInfo))
 		var docData = Dictionary(uniqueKeysWithValues: idsToDocData.map(\.doc))
 		var documentKeyIndexes = docData.mapValues { _ in 0 }
@@ -95,18 +95,18 @@ public actor DcApiHandler {
 		let idsToMetadata = idsToDocData.map(\.metadata)
 		let docMetadata = Dictionary(uniqueKeysWithValues: idsToMetadata).compactMapValues {$0}
 		let issuerSigned = try docData.mapValues { try IssuerSigned(data: $0.bytes)}
-        let privateKeyObjects: [String: CoseKeyPrivate] = try await MdocHelpers.getPrivateKeys(docKeyInfos, documentKeyIndexes)
+		let privateKeyObjects: [String: CoseKeyPrivate] = try await MdocHelpers.getPrivateKeys(docKeyInfos, documentKeyIndexes)
 		let serializedOrigin = originUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 		let dcapiInfo = CBOR.array([.utf8String(eiBase64Url), .utf8String(serializedOrigin)])
 		let dcapiInfoHash = Self.sha256(data: Data(dcapiInfo.encode()))
 		let dcApiHandoverCbor = CBOR.array([.utf8String("dcapi"), .byteString(dcapiInfoHash.bytes)])
 		let sessionTranscript = SessionTranscript(handOver: dcApiHandoverCbor)
-        let resp1 = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: nil, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
+		let resp1 = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: nil, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
 		let selectedItems1 = resp1?.validRequestItems ?? [:]
-		let selectedItems = Self.expandSelections(for: selectedItems1, documentIdsByDocType: docTypeToIds)
+		let selectedItems = Self.expandSelections(for: selectedItems1, documentIdsByDocType: docTypeToIds, selectedDocumentIds: selectedDocumentIds)
 		let resp = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: selectedItems, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
 		guard let resp else { throw MdocHelpers.makeError(code: .noDocumentToReturn) }
-        let sessionTranscriptEncoded = sessionTranscript.encode(options: CBOROptions())
+		let sessionTranscriptEncoded = sessionTranscript.encode(options: CBOROptions())
 		let docDeviceResponse = resp.deviceResponse
 		let plainText = docDeviceResponse.encode(options: CBOROptions())
 		let docMetadataValues = resp.documentIds.map { id in docMetadata[id] }
@@ -162,10 +162,11 @@ public actor DcApiHandler {
 			return Data(hashed)
 	}
 
-	static func expandSelections<Value>(for selectionsByDocType: [DocType: Value], documentIdsByDocType: [DocType: [String]]) -> [String: Value] {
+	static func expandSelections<Value>(for selectionsByDocType: [DocType: Value], documentIdsByDocType: [DocType: [String]], selectedDocumentIds: Set<String>? = nil) -> [String: Value] {
 		var selectionsByDocumentId: [String: Value] = [:]
 		for (docType, selection) in selectionsByDocType {
 			for documentId in documentIdsByDocType[docType] ?? [] {
+				if let selectedDocumentIds, !selectedDocumentIds.contains(documentId) { continue }
 				selectionsByDocumentId[documentId] = selection
 			}
 		}
@@ -190,18 +191,18 @@ public actor DcApiHandler {
 		let issuerSigned = try IssuerSigned(data: document.data.bytes)
 		let metadata = DocMetadata(from: document.metadata)
 		let docKeyInfo = DocKeyInfo(from: document.docKeyInfo)
-        let matchingClaims = filter(docClaims: documentClaims(from: issuerSigned, metadata: metadata), requestedElements: requestedElements)
+		let matchingClaims = filter(docClaims: documentClaims(from: issuerSigned, metadata: metadata), requestedElements: requestedElements)
 		let matchingNamespaces = requestedElements.keys.filter { namespace in
 			matchingClaims.contains(where: { $0.namespace == namespace })
 		}
 		return DocClaimsModel(configuration: DocClaimsModelConfiguration(id: document.id, createdAt: document.createdAt, docType: document.docType, displayName: document.displayName ?? metadata?.getDisplayName(nil), display: metadata?.display, issuerDisplay: metadata?.issuerDisplay, credentialIssuerIdentifier: metadata?.credentialIssuerIdentifier, configurationIdentifier: metadata?.configurationIdentifier, validFrom: issuerSigned.validFrom, validUntil: issuerSigned.validUntil, statusIdentifier: issuerSigned.issuerAuth.statusIdentifier, credentialsUsageCounts: nil, credentialPolicy: docKeyInfo?.credentialPolicy ?? metadata?.credentialOptions?.credentialPolicy ?? .rotateUse, secureAreaName: docKeyInfo?.secureAreaName ?? metadata?.keyOptions?.secureAreaName, modifiedAt: document.modifiedAt, docClaims: matchingClaims, docDataFormat: document.docDataFormat, hashingAlg: nil, nameSpaces: matchingNamespaces))
 	}
 
-    static func documentClaims(from issuerSigned: IssuerSigned, metadata: DocMetadata?) -> [DocClaim] {
+	static func documentClaims(from issuerSigned: IssuerSigned, metadata: DocMetadata?) -> [DocClaim] {
 		guard let nameSpaceItems = DocClaimsModel.getCborSignedItems(issuerSigned) else { return [] }
 		var docClaims: [DocClaim] = []
-        let cmd = metadata?.claims?.convertToCborClaimMetadata(nil)
-        DocClaimsModel.extractCborClaims(nameSpaceItems, &docClaims, cmd?.displayNames, cmd?.mandatory)
+		let cmd = metadata?.claims?.convertToCborClaimMetadata(nil)
+		DocClaimsModel.extractCborClaims(nameSpaceItems, &docClaims, cmd?.displayNames, cmd?.mandatory)
 		return docClaims
 	}
 
