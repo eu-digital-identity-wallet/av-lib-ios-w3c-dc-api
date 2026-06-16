@@ -49,17 +49,33 @@ public actor DcApiHandler {
 		}
 		try await loadIssuedCborDocuments()
 		let docTypes = documents.compactMap(\.docType)
-		let reqFind: (ISO18013MobileDocumentRequest.DocumentRequestSet) -> Bool = { $0.requests.allSatisfy({dr in docTypes.contains(dr.documentType)}) }
-		let drFind: ([ISO18013MobileDocumentRequest.DocumentRequestSet]) -> ISO18013MobileDocumentRequest.DocumentRequestSet? = { drs in drs.first(where: reqFind) }
-		let prSet = request.presentmentRequests.filter({ pr in pr.isMandatory && drFind(pr.documentRequestSets) != nil })
-		guard let pr = prSet.first, let drs = drFind(pr.documentRequestSets), !drs.requests.isEmpty else { throw MdocHelpers.makeError(code: .documents_not_provided) }
-		let requestedElementsByDocType = try Self.requestedElementsByDocType(documentRequestSet: drs)
+		// Collect every document-request-set from mandatory presentment requests that
+		// references at least one docType we hold, instead of only the first match.
+		// This is required for combined presentations (e.g. mDL + PID) where the
+		// verifier may split docTypes across multiple sets / presentment requests.
+		let matchingSets: [ISO18013MobileDocumentRequest.DocumentRequestSet] = request.presentmentRequests
+			.filter { $0.isMandatory }
+			.flatMap { $0.documentRequestSets }
+			.filter { set in set.requests.contains(where: { docTypes.contains($0.documentType) }) }
+		guard let firstSet = matchingSets.first else { throw MdocHelpers.makeError(code: .documents_not_provided) }
+		// Union the requested elements across all matching sets, keyed by docType.
+		var requestedElementsByDocType: [DocType: [NameSpace: Set<DataElementIdentifier>]] = [:]
+		for set in matchingSets {
+			let perSet = try Self.requestedElementsByDocType(documentRequestSet: set)
+			for (docType, namespaces) in perSet {
+				var merged = requestedElementsByDocType[docType] ?? [:]
+				for (ns, elements) in namespaces {
+					merged[ns, default: []].formUnion(elements)
+				}
+				requestedElementsByDocType[docType] = merged
+			}
+		}
 		let docClaimsModels: [DocClaimsModel] = try documents.compactMap { document in
 			guard let requestedElements = requestedElementsByDocType[document.docType] else { return nil }
 			let model = try Self.makeFilteredModel(for: document, requestedElements: requestedElements)
 			return model.docClaims.isEmpty ? nil : model
 		}
-		return (docClaimsModels, drs, kid, rn)
+		return (docClaimsModels, firstSet, kid, rn)
 	}
 
 	// proposed function in the wwdc video, to be implemented
