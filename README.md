@@ -46,6 +46,8 @@ struct RequestAuthorizationView: View {
 	@State var websiteName: String?
 	@State var requestSet: ISO18013MobileDocumentRequest.DocumentRequestSet?
 	@State var errorMessage: String?
+	@State var selectedDocumentIds: Set<String>?
+	@State var selectedClaimsByDocumentId: [String: [String: [String]]]?
 	
 	var body: some View {
 		VStack(alignment: .center) {
@@ -115,7 +117,9 @@ struct RequestAuthorizationView: View {
 			try await dcApiHandler.validateConsistency(request: context.request, rawRequest: rawRequest)
 			let responseData = try await dcApiHandler.buildAndEncryptResponse(
 				rawRequest: rawRequest,
-				originUrl: context.requestingWebsiteOrigin?.absoluteString)
+				originUrl: context.requestingWebsiteOrigin?.absoluteString,
+				selectedDocumentIds: selectedDocumentIds,
+				selectedClaimsByDocumentId: selectedClaimsByDocumentId)
 			return ISO18013MobileDocumentResponse(responseData: responseData)
 		}
 	}
@@ -129,7 +133,18 @@ struct RequestAuthorizationView: View {
 } // end view
 ```
 
-`validateRequest(_:)` now returns four values in this order: filtered `DocClaimsModel` values for locally available credentials, the matched `DocumentRequestSet`, the authority key identifier extracted from the reader certificate chain when present, and the reader name derived from that chain. The example above uses the filtered claims and matched request set, and ignores the authority key identifier.
+`validateRequest(_:)` returns four values in this order: filtered `DocClaimsModel` values for locally available credentials, the matched `DocumentRequestSet`, the authority key identifier extracted from the reader certificate chain when present, and the reader name derived from that chain. The example above uses the filtered claims and matched request set, and ignores the authority key identifier.
+
+When the verifier requests multiple document types across separate request sets (e.g. an mDL combined with a PID), `validateRequest(_:)` unions the requested elements from all matching sets so that all relevant credentials are returned.
+
+### Selective Disclosure
+
+`buildAndEncryptResponse` accepts two optional parameters that let the user choose which documents and claims to disclose:
+
+- **`selectedDocumentIds: Set<String>?`** — When set, only the documents with the given IDs are included in the response. Pass `nil` to include all matching documents (default behaviour).
+- **`selectedClaimsByDocumentId: [String: [String: [String]]]?`** — When set, only the specified elements are disclosed per document. The structure is a dictionary mapping document ID → namespace → array of element identifiers. Pass `nil` to disclose all requested elements (default behaviour).
+
+Both parameters default to `nil`, so existing callers are unaffected.
 
 ## Dependencies
 

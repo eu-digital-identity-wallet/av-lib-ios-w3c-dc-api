@@ -18,40 +18,122 @@ import Testing
 @testable import DcApi18013AnnexC
 import Foundation
 import MdocDataModel18013
+import MdocDataTransfer18013
 
-@Test func filtersDocClaimsByRequestedNamespaceAndElement() {
-	let requestedElements: [NameSpace: Set<DataElementIdentifier>] = [
-		"org.iso.18013.5.1": ["family_name"],
-		"org.iso.18013.5.1.aamva": ["organ_donor"]
-	]
-	let claims = [
-		DocClaim(name: "family_name", displayName: nil, dataValue: .string("Doe"), stringValue: "Doe", namespace: "org.iso.18013.5.1"),
-		DocClaim(name: "given_name", displayName: nil, dataValue: .string("Jane"), stringValue: "Jane", namespace: "org.iso.18013.5.1"),
-		DocClaim(name: "organ_donor", displayName: nil, dataValue: .boolean(true), stringValue: "true", namespace: "org.iso.18013.5.1.aamva"),
-		DocClaim(name: "age_over_18", displayName: nil, dataValue: .boolean(true), stringValue: "true", namespace: "eu.europa.ec.eudi.pid.1")
-	]
+// MARK: - expandSelections with selectedDocumentIds
 
-	let filteredClaims = DcApiHandler.filter(docClaims: claims, requestedElements: requestedElements)
-
-	#expect(filteredClaims.count == 2)
-	#expect(filteredClaims.map(\.name).sorted() == ["family_name", "organ_donor"])
-}
-
-@Test func expandsSelectionsToAllDocumentIdsForADocType() {
+@Test func expandsToAllDocumentIdsWhenNoSelectionGiven() {
 	let selectionsByDocType = [
-		"org.iso.18013.5.1.mDL": [
-			"org.iso.18013.5.1": ["family_name", "given_name"]
-		]
+		"org.iso.18013.5.1.mDL": ["org.iso.18013.5.1": ["family_name"]]
 	]
 	let documentIdsByDocType = [
-		"org.iso.18013.5.1.mDL": ["doc-1", "doc-2"],
-		"org.iso.18013.5.1.mVR": ["doc-3"]
+		"org.iso.18013.5.1.mDL": ["doc-1", "doc-2", "doc-3"]
 	]
 
-	let expandedSelections = DcApiHandler.expandSelections(for: selectionsByDocType, documentIdsByDocType: documentIdsByDocType)
+	let result = DcApiHandler.expandSelections(for: selectionsByDocType, documentIdsByDocType: documentIdsByDocType, selectedDocumentIds: nil)
 
-	#expect(expandedSelections.count == 2)
-	#expect(expandedSelections["doc-1"] == selectionsByDocType["org.iso.18013.5.1.mDL"])
-	#expect(expandedSelections["doc-2"] == selectionsByDocType["org.iso.18013.5.1.mDL"])
-	#expect(expandedSelections["doc-3"] == nil)
+	#expect(result.count == 3)
+	#expect(result["doc-1"] != nil)
+	#expect(result["doc-2"] != nil)
+	#expect(result["doc-3"] != nil)
+}
+
+@Test func expandsToOnlySelectedDocumentIds() {
+	let selectionsByDocType = [
+		"org.iso.18013.5.1.mDL": ["org.iso.18013.5.1": ["family_name"]]
+	]
+	let documentIdsByDocType = [
+		"org.iso.18013.5.1.mDL": ["doc-1", "doc-2", "doc-3"]
+	]
+
+	let result = DcApiHandler.expandSelections(for: selectionsByDocType, documentIdsByDocType: documentIdsByDocType, selectedDocumentIds: ["doc-2"])
+
+	#expect(result.count == 1)
+	#expect(result["doc-2"] == selectionsByDocType["org.iso.18013.5.1.mDL"])
+	#expect(result["doc-1"] == nil)
+	#expect(result["doc-3"] == nil)
+}
+
+@Test func selectsOneDocumentPerDocTypeAcrossMultipleDocTypes() {
+	let selectionsByDocType = [
+		"org.iso.18013.5.1.mDL": ["org.iso.18013.5.1": ["family_name"]],
+		"eu.europa.ec.eudi.pid.1": ["eu.europa.ec.eudi.pid.1": ["age_over_18"]]
+	]
+	let documentIdsByDocType = [
+		"org.iso.18013.5.1.mDL": ["mdl-1", "mdl-2"],
+		"eu.europa.ec.eudi.pid.1": ["pid-1", "pid-2"]
+	]
+
+	let result = DcApiHandler.expandSelections(for: selectionsByDocType, documentIdsByDocType: documentIdsByDocType, selectedDocumentIds: ["mdl-1", "pid-2"])
+
+	#expect(result.count == 2)
+	#expect(result["mdl-1"] != nil)
+	#expect(result["pid-2"] != nil)
+	#expect(result["mdl-2"] == nil)
+	#expect(result["pid-1"] == nil)
+}
+
+@Test func excludesAllWhenSelectedIdsMatchNoDocuments() {
+	let selectionsByDocType = [
+		"org.iso.18013.5.1.mDL": ["org.iso.18013.5.1": ["family_name"]]
+	]
+	let documentIdsByDocType = [
+		"org.iso.18013.5.1.mDL": ["doc-1", "doc-2"]
+	]
+
+	let result = DcApiHandler.expandSelections(for: selectionsByDocType, documentIdsByDocType: documentIdsByDocType, selectedDocumentIds: ["unknown"])
+
+	#expect(result.isEmpty)
+}
+
+// MARK: - narrowSelectedItems
+
+@Test func narrowKeepsOnlyChosenElements() {
+	let selectedItems: [String: [NameSpace: [RequestItem]]] = [
+		"doc-1": [
+			"org.iso.18013.5.1": [
+				RequestItem(elementIdentifier: "family_name"),
+				RequestItem(elementIdentifier: "given_name"),
+				RequestItem(elementIdentifier: "birth_date")
+			]
+		]
+	]
+	let chosen: [String: [String: [String]]] = [
+		"doc-1": ["org.iso.18013.5.1": ["family_name", "birth_date"]]
+	]
+
+	let result = DcApiHandler.narrowSelectedItems(selectedItems, to: chosen)
+
+	let kept = result["doc-1"]?["org.iso.18013.5.1"]?.map(\.elementIdentifier).sorted()
+	#expect(kept == ["birth_date", "family_name"])
+}
+
+@Test func narrowDropsNamespaceWhenNoElementsChosen() {
+	let selectedItems: [String: [NameSpace: [RequestItem]]] = [
+		"doc-1": [
+			"org.iso.18013.5.1": [RequestItem(elementIdentifier: "family_name")]
+		]
+	]
+	let chosen: [String: [String: [String]]] = [
+		"doc-1": ["org.iso.18013.5.1": []]
+	]
+
+	let result = DcApiHandler.narrowSelectedItems(selectedItems, to: chosen)
+
+	#expect(result["doc-1"]?["org.iso.18013.5.1"] == nil)
+}
+
+@Test func narrowLeavesDocumentsAbsentFromChosenUnchanged() {
+	let selectedItems: [String: [NameSpace: [RequestItem]]] = [
+		"doc-1": ["org.iso.18013.5.1": [RequestItem(elementIdentifier: "family_name")]],
+		"doc-2": ["org.iso.18013.5.1": [RequestItem(elementIdentifier: "given_name")]]
+	]
+	let chosen: [String: [String: [String]]] = [
+		"doc-1": ["org.iso.18013.5.1": ["family_name"]]
+	]
+
+	let result = DcApiHandler.narrowSelectedItems(selectedItems, to: chosen)
+
+	// doc-2 was not in `chosen`, so it is left untouched.
+	#expect(result["doc-2"]?["org.iso.18013.5.1"]?.map(\.elementIdentifier) == ["given_name"])
 }
