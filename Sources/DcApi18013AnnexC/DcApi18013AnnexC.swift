@@ -16,6 +16,7 @@
 
 import Foundation
 import SwiftCBOR
+import SwiftData
 import WalletStorage
 import MdocDataModel18013
 import MdocSecurity18013
@@ -26,17 +27,42 @@ import X509
 import SwiftHPKE
 
 public actor DcApiHandler {
-	let storage: KeyChainStorageService
+	let storage: any DataStorageService
 	var documents: [WalletStorage.Document] = []
 	var transactionLogger: (any TransactionLogger)?
 
+	public init(storage: any DataStorageService, transactionLogger: (any TransactionLogger)? = nil) {
+		self.storage = storage
+		self.transactionLogger = transactionLogger
+	}
+
+	public init(storage: any DataStorageService, serviceName: String, accessGroup: String, transactionLogger: (any TransactionLogger)? = nil) {
+		self.storage = storage
+		Self.registerDefaultSecureAreas(serviceName: serviceName, accessGroup: accessGroup)
+		self.transactionLogger = transactionLogger
+	}
+
 	public init(serviceName: String, accessGroup: String, transactionLogger: (any TransactionLogger)? = nil) {
-		storage = KeyChainStorageService(serviceName: serviceName, accessGroup: accessGroup)
-		// register default secure areas
+		self.storage = KeyChainStorageService(serviceName: serviceName, accessGroup: accessGroup)
+		Self.registerDefaultSecureAreas(serviceName: serviceName, accessGroup: accessGroup)
+		self.transactionLogger = transactionLogger
+	}
+
+	/// Uses a SwiftData store located in the given app group container, shared with the wallet app.
+	public init(serviceName: String, accessGroup: String, appGroup: String, transactionLogger: (any TransactionLogger)? = nil) throws {
+		let schema = Schema([SwiftDataStoredDocument.self])
+		let configuration = ModelConfiguration(schema: schema, groupContainer: .identifier(appGroup))
+		let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
+		self.storage = SwiftDataStorageService(modelContainer: modelContainer)
+		Self.registerDefaultSecureAreas(serviceName: serviceName, accessGroup: accessGroup)
+		self.transactionLogger = transactionLogger
+	}
+
+	private static func registerDefaultSecureAreas(serviceName: String, accessGroup: String) {
+		// Register default secure areas for key-backed presentations.
 		let kcSks = KeyChainSecureKeyStorage(serviceName: serviceName, accessGroup: accessGroup)
 		if SecureEnclave.isAvailable { SecureAreaRegistry.shared.register(secureArea: SecureEnclaveSecureArea.create(storage: kcSks)) }
 		SecureAreaRegistry.shared.register(secureArea: SoftwareSecureArea.create(storage: kcSks))
-		self.transactionLogger = transactionLogger
 	}
 
 	public func validateRequest(_ request: ISO18013MobileDocumentRequest) async throws -> ([DocClaimsModel], ISO18013MobileDocumentRequest.DocumentRequestSet, [UInt8], String?) {
@@ -118,13 +144,14 @@ public actor DcApiHandler {
 		let dcapiInfoHash = Self.sha256(data: Data(dcapiInfo.encode()))
 		let dcApiHandoverCbor = CBOR.array([.utf8String("dcapi"), .byteString(dcapiInfoHash.bytes)])
 		let sessionTranscript = SessionTranscript(handOver: dcApiHandoverCbor)
-		let resp1 = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: nil, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
+		let authenticationContext = ThreadSafeAuthContext()
+		let resp1 = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: nil, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository, authenticationContext: authenticationContext)
 		let selectedItems1 = resp1?.validRequestItems ?? [:]
 		var selectedItems = Self.expandSelections(for: selectedItems1, documentIdsByDocType: docTypeToIds, selectedDocumentIds: selectedDocumentIds)
 		if let selectedClaimsByDocumentId {
 			selectedItems = Self.narrowSelectedItems(selectedItems, to: selectedClaimsByDocumentId)
 		}
-		let resp = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: selectedItems, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository)
+		let resp = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: selectedItems, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository, authenticationContext: authenticationContext)
 		guard let resp else { throw MdocHelpers.makeError(code: .noDocumentToReturn) }
 		let sessionTranscriptEncoded = sessionTranscript.encode(options: CBOROptions())
 		let docDeviceResponse = resp.deviceResponse
