@@ -48,16 +48,6 @@ public actor DcApiHandler {
 		self.transactionLogger = transactionLogger
 	}
 
-	/// Uses a SwiftData store located in the given app group container, shared with the wallet app.
-	public init(serviceName: String, accessGroup: String, appGroup: String, transactionLogger: (any TransactionLogger)? = nil) throws {
-		let schema = Schema([SwiftDataStoredDocument.self])
-		let configuration = ModelConfiguration(schema: schema, groupContainer: .identifier(appGroup))
-		let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
-		self.storage = SwiftDataStorageService(modelContainer: modelContainer)
-		Self.registerDefaultSecureAreas(serviceName: serviceName, accessGroup: accessGroup)
-		self.transactionLogger = transactionLogger
-	}
-
 	private static func registerDefaultSecureAreas(serviceName: String, accessGroup: String) {
 		// Register default secure areas for key-backed presentations.
 		let kcSks = KeyChainSecureKeyStorage(serviceName: serviceName, accessGroup: accessGroup)
