@@ -17,6 +17,7 @@
  import Foundation
 
 extension Data {
+    /// Decodes a Base64URL string, adding missing padding. Returns nil if decoding fails.
     init?(base64urlEncoded input: String) {
         var base64 = input
         base64 = base64.replacingOccurrences(of: "-", with: "+")
