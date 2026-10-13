@@ -36,13 +36,6 @@ public actor DcApiHandler {
 		self.transactionLogger = transactionLogger
 	}
 
-	/// Uses the supplied Keychain store and registers default secure areas with its service name and access group.
-	public init(storage: KeyChainStorageService, transactionLogger: (any TransactionLogger)? = nil) {
-		self.storage = storage
-		Self.registerDefaultSecureAreas(serviceName: storage.serviceName, accessGroup: storage.accessGroup)
-		self.transactionLogger = transactionLogger
-	}
-
 	/// Creates a Keychain store and registers default secure areas using the given service name and access group.
 	public init(serviceName: String, accessGroup: String, transactionLogger: (any TransactionLogger)? = nil) {
 		self.storage = KeyChainStorageService(serviceName: serviceName, accessGroup: accessGroup)
