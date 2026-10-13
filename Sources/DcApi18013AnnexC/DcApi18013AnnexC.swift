@@ -27,6 +27,48 @@ import X509
 import SwiftHPKE
 
 public actor DcApiHandler {
+
+	/// Uses a Keychain store with the service name returned by `Bundle.getMainAppBundleID()`.
+	/// Discovers the default access group using a temporary Keychain item, falling back to the same service name.
+	public init(transactionLogger: (any TransactionLogger)? = nil) {
+		self.storage = KeyChainStorageService(serviceName: Bundle.getMainAppBundleID(), accessGroup: Bundle.getKeychainAccessGroup())
+		Self.registerDefaultSecureAreas(serviceName: Bundle.getMainAppBundleID(), accessGroup: Bundle.getKeychainAccessGroup())
+		self.transactionLogger = transactionLogger
+	}
+
+	/// Uses the supplied Keychain store and registers default secure areas with its service name and access group.
+	public init(storage: KeyChainStorageService, transactionLogger: (any TransactionLogger)? = nil) {
+		self.storage = storage
+		Self.registerDefaultSecureAreas(serviceName: storage.serviceName, accessGroup: storage.accessGroup)
+		self.transactionLogger = transactionLogger
+	}
+
+	/// Creates a Keychain store and registers default secure areas using the given service name and access group.
+	public init(serviceName: String, accessGroup: String, transactionLogger: (any TransactionLogger)? = nil) {
+		self.storage = KeyChainStorageService(serviceName: serviceName, accessGroup: accessGroup)
+		Self.registerDefaultSecureAreas(serviceName: serviceName, accessGroup: accessGroup)
+		self.transactionLogger = transactionLogger
+	}
+
+	/// Uses a SwiftData store located in the given app group container, shared with the wallet app.
+	/// Registers default secure areas using the Bundle service name and discovered Keychain access group.
+	public init(appGroup: String, transactionLogger: (any TransactionLogger)? = nil) throws {
+		let schema = Schema([SwiftDataStoredDocument.self])
+		let configuration = ModelConfiguration(schema: schema, groupContainer: .identifier(appGroup))
+		let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
+		self.storage = SwiftDataStorageService(modelContainer: modelContainer)
+		Self.registerDefaultSecureAreas(serviceName: Bundle.getMainAppBundleID(), accessGroup: Bundle.getKeychainAccessGroup())
+		self.transactionLogger = transactionLogger
+	}
+
+	/// Uses a SwiftData store located in the given model container.
+	/// Registers default secure areas using the Bundle service name and discovered Keychain access group.
+	public init(modelContainer: ModelContainer, transactionLogger: (any TransactionLogger)? = nil) throws {
+		self.storage = SwiftDataStorageService(modelContainer: modelContainer)
+		Self.registerDefaultSecureAreas(serviceName: Bundle.getMainAppBundleID(), accessGroup: Bundle.getKeychainAccessGroup())
+		self.transactionLogger = transactionLogger
+	}
+
 	let storage: any DataStorageService
 	var documents: [WalletStorage.Document] = []
 	var transactionLogger: (any TransactionLogger)?
@@ -67,45 +109,11 @@ public actor DcApiHandler {
 		}
 	}
 
-	public init(storage: any DataStorageService, transactionLogger: (any TransactionLogger)? = nil) {
-		self.storage = storage
-		self.transactionLogger = transactionLogger
-	}
-
-	public init(storage: any DataStorageService, serviceName: String, accessGroup: String, transactionLogger: (any TransactionLogger)? = nil) {
-		self.storage = storage
-		Self.registerDefaultSecureAreas(serviceName: serviceName, accessGroup: accessGroup)
-		self.transactionLogger = transactionLogger
-	}
-
-	public init(serviceName: String, accessGroup: String, transactionLogger: (any TransactionLogger)? = nil) {
-		self.storage = KeyChainStorageService(serviceName: serviceName, accessGroup: accessGroup)
-		Self.registerDefaultSecureAreas(serviceName: serviceName, accessGroup: accessGroup)
-		self.transactionLogger = transactionLogger
-	}
-
-	private static func registerDefaultSecureAreas(serviceName: String, accessGroup: String) {
+	private static func registerDefaultSecureAreas(serviceName: String, accessGroup: String?) {
 		// Register default secure areas for key-backed presentations.
 		let kcSks = KeyChainSecureKeyStorage(serviceName: serviceName, accessGroup: accessGroup)
 		if SecureEnclave.isAvailable { SecureAreaRegistry.shared.register(secureArea: SecureEnclaveSecureArea.create(storage: kcSks)) }
 		SecureAreaRegistry.shared.register(secureArea: SoftwareSecureArea.create(storage: kcSks))
-	}
-
-	/// Uses a SwiftData store located in the given app group container, shared with the wallet app.
-	public init(serviceName: String, accessGroup: String, appGroup: String, transactionLogger: (any TransactionLogger)? = nil) throws {
-		let schema = Schema([SwiftDataStoredDocument.self])
-		let configuration = ModelConfiguration(schema: schema, groupContainer: .identifier(appGroup))
-		let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
-		self.storage = SwiftDataStorageService(modelContainer: modelContainer)
-		Self.registerDefaultSecureAreas(serviceName: serviceName, accessGroup: accessGroup)
-		self.transactionLogger = transactionLogger
-	}
-
-	/// Uses a SwiftData store located in the given model container.
-	public init(serviceName: String, accessGroup: String, modelContainer: ModelContainer, transactionLogger: (any TransactionLogger)? = nil) throws {
-		self.storage = SwiftDataStorageService(modelContainer: modelContainer)
-		Self.registerDefaultSecureAreas(serviceName: serviceName, accessGroup: accessGroup)
-		self.transactionLogger = transactionLogger
 	}
 
 	public func validateRequest(_ request: ISO18013MobileDocumentRequest) async throws -> ([DocClaimsModel], ISO18013MobileDocumentRequest.DocumentRequestSet, [UInt8], String?) {
