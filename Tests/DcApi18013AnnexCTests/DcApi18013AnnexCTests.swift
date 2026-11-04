@@ -120,7 +120,7 @@ import MdocDataTransfer18013
 
 	let result = DcApiHandler.narrowSelectedItems(selectedItems, to: chosen)
 
-	#expect(result["doc-1"]?["org.iso.18013.5.1"] == nil)
+	#expect(result["doc-1"] == nil)
 }
 
 @Test func narrowLeavesDocumentsAbsentFromChosenUnchanged() {
