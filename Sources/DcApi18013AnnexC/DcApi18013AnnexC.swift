@@ -199,7 +199,6 @@ public actor DcApiHandler {
 			// create input structures
 			if documents.count == 0 { try await loadIssuedCborDocuments() }
 			let idsToDocData = documents.compactMap { $0.getDataForTransfer() }
-			let docTypeToIds = Dictionary(grouping: documents, by: { d in d.docType}).mapValues { docs in docs.map(\.id) }
 			var docKeyInfos = Dictionary(uniqueKeysWithValues: idsToDocData.map(\.docKeyInfo))
 			var docData = Dictionary(uniqueKeysWithValues: idsToDocData.map(\.doc))
 			var documentKeyIndexes = docData.mapValues { _ in 0 }
@@ -221,9 +220,7 @@ public actor DcApiHandler {
 			let dcApiHandoverCbor = CBOR.array([.utf8String("dcapi"), .byteString(dcapiInfoHash.bytes)])
 			let sessionTranscript = SessionTranscript(handOver: dcApiHandoverCbor)
 			let authenticationContext = ThreadSafeAuthContext()
-			let resp1 = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, selectedItems: nil, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], zkSystemRepository: zkSystemRepository, authenticationContext: authenticationContext)
-			let selectedItems1 = resp1?.validRequestItems ?? [:]
-			var selectedItems = Self.expandSelections(for: selectedItems1, documentIdsByDocType: docTypeToIds, selectedDocumentIds: selectedDocumentIds)
+			var selectedItems = try await Self.validSelections(deviceRequest: deviceReq, issuerSigned: issuerSigned, docMetadata: docMetadata, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, selectedDocumentIds: selectedDocumentIds, authenticationContext: authenticationContext)
 			if let selectedClaimsByDocumentId {
 				selectedItems = Self.narrowSelectedItems(selectedItems, to: selectedClaimsByDocumentId)
 			}
@@ -296,6 +293,20 @@ public actor DcApiHandler {
 			return Data(hashed)
 	}
 
+	static func validSelections(deviceRequest: DeviceRequest, issuerSigned: [String: IssuerSigned], docMetadata: [String: Data], privateKeyObjects: [String: CoseKeyPrivate], sessionTranscript: SessionTranscript, selectedDocumentIds: Set<String>?, authenticationContext: ThreadSafeAuthContext) async throws -> RequestItems {
+		// Resolve each stored document independently: documents sharing a docType may
+		// contain different claims. Never copy a first match's selection to its siblings.
+		var selectedItems = RequestItems()
+		for (id, document) in issuerSigned {
+			if let selectedDocumentIds, !selectedDocumentIds.contains(id) { continue }
+			let preview = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceRequest, issuerSigned: [id: document], docMetadata: docMetadata, selectedItems: nil, privateKeyObjects: privateKeyObjects, sessionTranscript: sessionTranscript, dauthMethod: .deviceSignature, unlockData: [:], authenticationContext: authenticationContext)
+			if let selection = preview?.validRequestItems[document.issuerAuth.mso.docType], !selection.isEmpty {
+				selectedItems[id] = selection
+			}
+		}
+		return selectedItems
+	}
+
 	// Keeps only the chosen elements per document. selectedItems maps docId -> namespace -> [RequestItem]; chosen maps docId -> namespace -> [elementId]. Documents absent from chosen are left unchanged.
 	static func narrowSelectedItems(_ selectedItems: [String: [NameSpace: [RequestItem]]], to chosen: [String: [String: [String]]]) -> [String: [NameSpace: [RequestItem]]] {
 		var result = selectedItems
@@ -307,7 +318,8 @@ public actor DcApiHandler {
 				let filtered = items.filter { kept.contains($0.elementIdentifier) }
 				if !filtered.isEmpty { narrowed[namespace] = filtered }
 			}
-			result[docId] = narrowed
+			// An empty document selection must never reach helpers that interpret it as all claims.
+			result[docId] = narrowed.isEmpty ? nil : narrowed
 		}
 		return result
 	}
