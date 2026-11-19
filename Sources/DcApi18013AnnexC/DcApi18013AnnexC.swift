@@ -263,7 +263,7 @@ public actor DcApiHandler {
 			guard let docKeyInfoData = docKeyInfos[id], let dkid = docKeyInfoData,
 				  let dki = DocKeyInfo(from: dkid),
 				  let keyIndex = documentKeyIndexes[id] else { continue }
-			let secureArea = SecureAreaRegistry.shared.get(name: dki.secureAreaName)
+			let secureArea = try SecureAreaRegistry.shared.get(name: dki.secureAreaName)
 			// Delete credential and key if one-time-use policy, but not for ZK documents
 			let docType = documents.first(where: { $0.id == id })?.docType
 			let isZkDocument = docType.map { zkDocTypes.contains($0) } ?? false
