@@ -195,7 +195,7 @@ public actor DcApiHandler {
 				}
 				await updatePresentationLog(requested: Self.logClaims(elements))
 			}
-			guard case let .array(eiArr) = eiCbor, eiArr.count == 2, case let .map(eiMap) = eiArr[1], case let .map(recPK) = eiMap["recipientPublicKey"], case let .unsignedInt(crv) = recPK[-1], crv == 1, case .unsignedInt(_) = recPK[1], case let .byteString(bx) = recPK[-2], case let .byteString(by) = recPK[-3] else { throw MdocHelpers.makeError(code: .sessionEncryptionNotInitialized) }
+			let receiverKey = try Self.recipientPublicKey(encryptionInfo: eiCbor)
 			// create input structures
 			if documents.count == 0 { try await loadIssuedCborDocuments() }
 			let idsToDocData = documents.compactMap { $0.getDataForTransfer() }
@@ -240,7 +240,7 @@ public actor DcApiHandler {
 			// Update key batch info for presented documents to decrement one-time-use count
 			try await updateKeyBatchInfoForPresentedDocuments(presentedIds: Array(sentIds), docKeyInfos: docKeyInfos, documentKeyIndexes: documentKeyIndexes, deviceResponse: resp.deviceResponse)
 			// Create the Sender instance and encrypt
-			let res = Self.hpkeEncrypt(receiverPublicKeyRepresentation: Data(bx + by), plainText: Data(resp.deviceResponse.encode(options: CBOROptions())), info: Data(sessionTranscriptEncoded))
+			let res = try Self.hpkeEncrypt(receiverKey: receiverKey, plainText: Data(resp.deviceResponse.encode(options: CBOROptions())), info: Data(sessionTranscriptEncoded))
 			let encryptedResponseData = CBOR.map([.utf8String("enc"): .byteString(res[0].bytes), .utf8String("cipherText"): .byteString(res[1].bytes)])
 			let encryptedResponse = CBOR.array([.utf8String("dcapi"), encryptedResponseData])
 
@@ -280,11 +280,23 @@ public actor DcApiHandler {
 		documents = docs.filter { $0.docDataFormat == .cbor }
 	}
 
-	static func hpkeEncrypt(receiverPublicKeyRepresentation: Data, plainText: Data, info: Data) -> [Data] {
-		let receiverKey = try! P256.KeyAgreement.PublicKey(rawRepresentation: receiverPublicKeyRepresentation)
-		let recipientPublicKey = try! PublicKey(der: Bytes(receiverKey.derRepresentation))
+	/// EncryptionInfo = ["dcapi", {"nonce", "recipientPublicKey"}] (ISO/IEC TS 18013-7 Annex C).
+	/// The recipient key is an EC2 P-256 COSE_Key with 32-byte coordinates on the curve.
+	static func recipientPublicKey(encryptionInfo: CBOR) throws -> P256.KeyAgreement.PublicKey {
+		guard case let .array(eiArr) = encryptionInfo, eiArr.count == 2, eiArr[0] == .utf8String("dcapi"),
+			case let .map(eiMap) = eiArr[1], case let .map(recPK) = eiMap["recipientPublicKey"],
+			recPK[1] == .unsignedInt(2), recPK[-1] == .unsignedInt(1),
+			case let .byteString(bx) = recPK[-2], case let .byteString(by) = recPK[-3], bx.count == 32, by.count == 32,
+			let key = try? P256.KeyAgreement.PublicKey(rawRepresentation: Data(bx + by)),
+			(try? PublicKey(der: Bytes(key.derRepresentation))) != nil
+		else { throw MdocHelpers.makeError(code: .sessionEncryptionNotInitialized) }
+		return key
+	}
+
+	static func hpkeEncrypt(receiverKey: P256.KeyAgreement.PublicKey, plainText: Data, info: Data) throws -> [Data] {
+		let recipientPublicKey = try PublicKey(der: Bytes(receiverKey.derRepresentation))
 		let theSuite = CipherSuite(kem: .P256, kdf: .KDF256, aead: .AESGCM128)
-		let (enc, cipherText) = try! theSuite.seal(publicKey: recipientPublicKey, info: info.bytes, pt: plainText.bytes, aad: [])
+		let (enc, cipherText) = try theSuite.seal(publicKey: recipientPublicKey, info: info.bytes, pt: plainText.bytes, aad: [])
 		return [Data(enc), Data(cipherText)]
 	}
 
