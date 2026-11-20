@@ -15,7 +15,7 @@ let package = Package(
 	],
 	dependencies: [
 		.package(url: "https://github.com/apple/swift-log.git", from: "1.13.2"),
-		.package(url: "https://github.com/eu-digital-identity-wallet/eudi-lib-ios-iso18013-data-transfer.git", exact: "0.31.0"),
+		.package(url: "https://github.com/eu-digital-identity-wallet/eudi-lib-ios-iso18013-data-transfer.git", exact: "0.32.0"),
 		.package(url: "https://github.com/eu-digital-identity-wallet/eudi-lib-ios-wallet-storage.git", exact: "0.27.1"),
 		.package(url: "https://github.com/leif-ibsen/SwiftHPKE", from: "2.8.0"),
 	],
